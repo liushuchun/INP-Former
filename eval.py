@@ -13,11 +13,12 @@ import cv2
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms.functional as TF
 from torch.utils.data import DataLoader
 
 # repo-specific imports (assume same as before)
-from utils import evaluation_batch, setup_seed, get_logger
+from utils import evaluation_batch, setup_seed, get_logger, get_gaussian_kernel
 from dataset import get_data_transforms
 from models import vit_encoder
 from models.uad import INP_Former
@@ -124,6 +125,7 @@ def main(args):
                        fuse_layer_encoder=[[0,1,2,3],[4,5,6,7]], fuse_layer_decoder=[[0,1,2,3],[4,5,6,7]],
                        prototype_token=INP)
     model = model.to(device)
+    gaussian_kernel = get_gaussian_kernel(kernel_size=5, sigma=4).to(device)
 
     # load weights
     state_path =  'model.pth'
@@ -153,39 +155,23 @@ def main(args):
                 cls_name = cls_name[0]
 
             img_t = img_t.to(device)
-            # forward - adapt to your model; expect (en, de, g_loss) or similar
-            out = model(img_t)
-            if isinstance(out, (list, tuple)) and len(out) >= 2:
-                en = out[0]
-                de = out[1]
-            else:
-                en = out
-                de = None
+            if img_t.ndim == 3:
+                img_t = img_t.unsqueeze(0)
 
-            # 简单示例：用最后一层 feature 的 channel-norm 作为 anomaly map（请根据你的 evaluation_batch 替换）
-            if isinstance(en, (list, tuple)):
-                feat = en[-1]
-            else:
-                feat = en
-            if isinstance(feat, torch.Tensor):
-                if feat.ndim == 4:
-                    amap = torch.norm(feat, p=2, dim=1).cpu().numpy()  # [B, H, W]
-                    amap = amap[0]
-                elif feat.ndim == 3:
-                    amap = feat.mean(dim=2).cpu().numpy()[0]  # simplistic
-                else:
-                    amap = feat.squeeze().cpu().numpy()
-            else:
-                raise RuntimeError("Unexpected feature type")
+            # forward & anomaly map (match Zero_Shot_App.py logic)
+            _ = model(img_t)
+            anomaly_map = model.distance
+            side = int(anomaly_map.shape[1] ** 0.5)
+            anomaly_map = anomaly_map.reshape([anomaly_map.shape[0], side, side]).contiguous()
+            anomaly_map = torch.unsqueeze(anomaly_map, dim=1)
+            anomaly_map = F.interpolate(anomaly_map, size=img_t.shape[-1], mode='bilinear', align_corners=True)
+            anomaly_map = gaussian_kernel(anomaly_map)
 
-            # resize anomaly map -> 256x256
-            amap_resized = cv2.resize(amap, (256, 256), interpolation=cv2.INTER_LINEAR)
-            amap_uint8 = normalize_to_uint8(amap_resized)
-            # 二值化（Otsu）
-            try:
-                _, bin_mask = cv2.threshold(amap_uint8, 0, 255, cv2.THRESH_OTSU)
-            except Exception:
-                _, bin_mask = cv2.threshold(amap_uint8, 0, 255, cv2.THRESH_BINARY)
+            anomaly_map = anomaly_map.squeeze().cpu().numpy()
+            anomaly_map = (anomaly_map * 255).astype(np.uint8)
+
+            # binary mask via threshold > 90
+            bin_mask = (anomaly_map > 90).astype(np.uint8) * 255
 
             # 判断是否为异常：二值掩码上有非零像素 -> anomaly=1
             is_anomaly = 1 if np.any(bin_mask > 0) else 0
@@ -195,26 +181,17 @@ def main(args):
             os.makedirs(cls_dir, exist_ok=True)
             # 生成文件名（把相对路径中的斜杠换为下划线，以避免目录嵌套）
             safe_base = rel_path.split("/")[-1]
-            heatmap_name = f"{safe_base}_anom.png"
-            heatmap_path = os.path.join(cls_dir, heatmap_name)
-            cv2.imwrite(heatmap_path, amap_uint8)
+            anomaly_map_name = f"{safe_base}_anomaly_map.png"
+            anomaly_map_path = os.path.join(cls_dir, anomaly_map_name)
+            cv2.imwrite(anomaly_map_path, anomaly_map)
 
-            # 若异常则写 mask 文件并在 meta 中返回路径（相对 data_path）
-            if is_anomaly:
-                mask_name = f"{safe_base}_mask.png"
-                mask_path_abs = os.path.join(cls_dir, mask_name)
-                # save mask as binary PNG (0/255)
-                cv2.imwrite(mask_path_abs, bin_mask)
-                # produce relative path consistent with your sample, e.g. 'battery/NG/..._mask.png'
-                # 我们把结果放在 save_dir/.../results/<cls>/<file>
-                # 如果你需要把 mask 放回 data_path 下并用相对 data_path 的路径，请改写这里。
-                # 使用相对到 args.save_dir/args.save_name/results 的路径：
-                rel_mask_path = os.path.relpath(mask_path_abs, args.data_path).replace('\\','/')
-            else:
-                rel_mask_path = None
+            mask_name = f"{safe_base}_mask.png"
+            mask_path_abs = os.path.join(cls_dir, mask_name)
+            cv2.imwrite(mask_path_abs, bin_mask)
+            rel_mask_path = os.path.relpath(mask_path_abs, args.data_path).replace('\\','/')
 
             # 全局 img score（用 anomaly map 的均值）
-            img_score = float(amap_resized.mean())
+            img_score = float(anomaly_map.mean())
 
             # 组装一条 meta 记录（和你示例一致）
             meta_entry = {
