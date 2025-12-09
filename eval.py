@@ -159,6 +159,11 @@ def main(args):
             if img_t.ndim == 3:
                 img_t = img_t.unsqueeze(0)
 
+            # 原始图尺寸
+            img_abs_path = os.path.join(args.data_path, rel_path)
+            with Image.open(img_abs_path) as _img_orig:
+                orig_w, orig_h = _img_orig.size
+
             # forward & anomaly map (match Zero_Shot_App.py logic)
             _ = model(img_t)
             anomaly_map = model.distance
@@ -170,12 +175,25 @@ def main(args):
 
             anomaly_map = anomaly_map.squeeze().cpu().numpy()
             anomaly_map = (anomaly_map * 255).astype(np.uint8)
+            anomaly_map = cv2.resize(anomaly_map, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
             # binary mask via threshold > 90
             bin_mask = (anomaly_map > 90).astype(np.uint8) * 255
+            if bin_mask.shape[0] != orig_h or bin_mask.shape[1] != orig_w:
+                bin_mask = cv2.resize(bin_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
             # 判断是否为异常：二值掩码上有非零像素 -> anomaly=1
             is_anomaly = 1 if np.any(bin_mask > 0) else 0
+
+            # 获取 specie_name
+            matched_meta = None
+            for it in test_dataset.items:
+                if it['rel_path'] == rel_path and it['cls_name'] == cls_name:
+                    matched_meta = it['meta']
+                    break
+            specie_name = ""
+            if matched_meta and 'specie_name' in matched_meta:
+                specie_name = matched_meta.get('specie_name', "")
 
             # 保存 heatmap & mask（按类归档）
             rel_dir = os.path.dirname(rel_path)
@@ -186,10 +204,12 @@ def main(args):
             anomaly_map_path = os.path.join(cls_dir, anomaly_map_name)
             cv2.imwrite(anomaly_map_path, anomaly_map)
 
-            mask_name = f"{base_name}_mask.png"
-            mask_path_abs = os.path.join(cls_dir, mask_name)
-            cv2.imwrite(mask_path_abs, bin_mask)
-            rel_mask_path = os.path.relpath(mask_path_abs, results_root).replace('\\','/')
+            rel_mask_path = None
+            if not (specie_name == "OK" and is_anomaly == 1):
+                mask_name = f"{base_name}_mask.png"
+                mask_path_abs = os.path.join(cls_dir, mask_name)
+                cv2.imwrite(mask_path_abs, bin_mask)
+                rel_mask_path = os.path.relpath(mask_path_abs, results_root).replace('\\','/')
 
             # 全局 img score（用 anomaly map 的均值）
             img_score = float(anomaly_map.mean())
@@ -202,24 +222,12 @@ def main(args):
                 "specie_name": "",
                 "anomaly": int(is_anomaly)
             }
-            # 如果原 meta 中包含 specie_name（test_dataset.items），我们优先填入
-            # 找到对应项的 original meta entry
-            # 这里做一次尝试性填充
-            matched_meta = None
-            for it in test_dataset.items:
-                if it['rel_path'] == rel_path and it['cls_name'] == cls_name:
-                    matched_meta = it['meta']
-                    break
-            if matched_meta:
-                if 'specie_name' in matched_meta:
-                    meta_entry['specie_name'] = matched_meta.get('specie_name', "")
-                # 如果原来有 mask_path 字段且为非空，也可以保持，但我们覆盖为推断结果的 mask_path
+            meta_entry['specie_name'] = specie_name
             if cls_name not in meta_out["test"]:
                 meta_out["test"][cls_name] = []
             meta_out["test"][cls_name].append(meta_entry)
 
             # 计算 per-class 指标
-            specie_name = meta_entry.get("specie_name", "")
             gt_anomaly = 0 if specie_name == "OK" else 1
             if cls_name not in metrics:
                 metrics[cls_name] = {"tp":0,"tn":0,"fp":0,"fn":0}
