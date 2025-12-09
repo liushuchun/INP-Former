@@ -9,3 +9,4 @@ model.pth
 __pycache__
 dinov1
 dinov2
+*.cpython-38.pyc

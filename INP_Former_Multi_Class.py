@@ -222,7 +222,7 @@ if __name__ == '__main__':
     # training info
     parser.add_argument('--total_epochs', type=int, default=200)
     parser.add_argument('--batch_size', type=int, default=16)
-    parser.add_argument('--phase', type=str, default='train')
+    parser.add_argument('--phase', type=str, default='test')
 
     args = parser.parse_args()
     args.save_name = args.save_name + f'_dataset={args.dataset}_Encoder={args.encoder}_Resize={args.input_size}_Crop={args.crop_size}_INP_num={args.INP_num}'

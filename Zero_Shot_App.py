@@ -34,8 +34,7 @@ args = parser.parse_args()
 
 
 ############ Init Model
-ckt_path1 = 'saved_results/INP-Former-Multi-Class_dataset=Real-IAD_Encoder=dinov2reg_vit_base_14_Resize=448_Crop=392_INP_num=6/model.pth'
-ckt_path2 = "saved_results/INP-Former-Multi-Class_dataset=VisA_Encoder=dinov2reg_vit_base_14_Resize=448_Crop=392_INP_num=6/model.pth"
+ckt_path1 = 'model.pth'
 
 #
 data_transform, _ = get_data_transforms(args.input_size, args.crop_size)
@@ -111,14 +110,8 @@ def resize_and_center_crop(image, resize_size=448, crop_size=392):
 
 def process_image(image, options):
     # Load the model based on selected options
-    if 'Real-IAD' in options:
-        model.load_state_dict(torch.load(ckt_path1), strict=True)
-    elif 'VisA' in options:
-        model.load_state_dict(torch.load(ckt_path2), strict=True)
-    else:
-        # Default to 'All' if no valid option is provided
-        model.load_state_dict(torch.load(ckt_path1), strict=True)
-        print('Invalid option. Defaulting to All.')
+    model.load_state_dict(torch.load(ckt_path1), strict=True)
+   
 
     # Ensure image is in RGB mode
     image = image.convert('RGB')
@@ -138,7 +131,7 @@ def process_image(image, options):
     input_image = input_image.to(device)
 
     with torch.no_grad():
-        _ = model(input_image.unsqueeze(0))
+        result = model(input_image.unsqueeze(0))
         anomaly_map = model.distance
         side = int(model.distance.shape[1] ** 0.5)
         anomaly_map = anomaly_map.reshape([anomaly_map.shape[0], side, side]).contiguous()
@@ -170,8 +163,7 @@ demo = gr.Interface(
     fn=process_image,
     inputs=[
         gr.Image(type="pil", label="Upload Image"),
-        gr.Radio(["Real-IAD",
-                  "VisA"],
+        gr.Radio(["Real-IAD",],
         label="Pre-trained Datasets")
     ],
     outputs=[
