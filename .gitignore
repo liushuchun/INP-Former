@@ -1,0 +1,11 @@
+Real-IAD-Variety-subset/
+saved_results
+update_results
+model.pth
+*.pyc
+.ipynb_checkpoints/
+*.pth
+*/__pycache__/*
+__pycache__
+dinov1
+dinov2
