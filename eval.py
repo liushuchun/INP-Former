@@ -137,7 +137,8 @@ def main(args):
     # results root
     results_root = os.path.join(args.save_dir, args.save_name, 'results')
     os.makedirs(results_root, exist_ok=True)
-    meta_out_list = []  # 将写入 meta.json 的条目集合
+    meta_out = {"test": {}}  # 按原始结构保存
+    metrics = {}  # per-class统计
 
     def normalize_to_uint8(x):
         x = x - x.min()
@@ -177,28 +178,28 @@ def main(args):
             is_anomaly = 1 if np.any(bin_mask > 0) else 0
 
             # 保存 heatmap & mask（按类归档）
-            cls_dir = os.path.join(results_root, cls_name)
+            rel_dir = os.path.dirname(rel_path)
+            base_name = os.path.splitext(os.path.basename(rel_path))[0]
+            cls_dir = os.path.join(results_root, rel_dir)
             os.makedirs(cls_dir, exist_ok=True)
-            # 生成文件名（把相对路径中的斜杠换为下划线，以避免目录嵌套）
-            safe_base = rel_path.split("/")[-1]
-            anomaly_map_name = f"{safe_base}_anomaly_map.png"
+            anomaly_map_name = f"{base_name}_anomaly_map.png"
             anomaly_map_path = os.path.join(cls_dir, anomaly_map_name)
             cv2.imwrite(anomaly_map_path, anomaly_map)
 
-            mask_name = f"{safe_base}_mask.png"
+            mask_name = f"{base_name}_mask.png"
             mask_path_abs = os.path.join(cls_dir, mask_name)
             cv2.imwrite(mask_path_abs, bin_mask)
-            rel_mask_path = os.path.relpath(mask_path_abs, args.data_path).replace('\\','/')
+            rel_mask_path = os.path.relpath(mask_path_abs, results_root).replace('\\','/')
 
             # 全局 img score（用 anomaly map 的均值）
             img_score = float(anomaly_map.mean())
 
             # 组装一条 meta 记录（和你示例一致）
             meta_entry = {
-                "img_path": rel_path,              # 保持原始 meta 中的相对路径
-                "mask_path": rel_mask_path,        # None -> JSON 会显示为 null
+                "img_path": rel_path,
+                "mask_path": rel_mask_path,
                 "cls_name": cls_name,
-                "specie_name": "",                 # 如果你的 meta 中有 specie_name，可以从原 meta 中取出；这里占位为空
+                "specie_name": "",
                 "anomaly": int(is_anomaly)
             }
             # 如果原 meta 中包含 specie_name（test_dataset.items），我们优先填入
@@ -213,16 +214,50 @@ def main(args):
                 if 'specie_name' in matched_meta:
                     meta_entry['specie_name'] = matched_meta.get('specie_name', "")
                 # 如果原来有 mask_path 字段且为非空，也可以保持，但我们覆盖为推断结果的 mask_path
-            meta_out_list.append(meta_entry)
+            if cls_name not in meta_out["test"]:
+                meta_out["test"][cls_name] = []
+            meta_out["test"][cls_name].append(meta_entry)
 
-    # 写入 meta.json（扁平数组）
+            # 计算 per-class 指标
+            specie_name = meta_entry.get("specie_name", "")
+            gt_anomaly = 0 if specie_name == "OK" else 1
+            if cls_name not in metrics:
+                metrics[cls_name] = {"tp":0,"tn":0,"fp":0,"fn":0}
+            if is_anomaly == 1 and gt_anomaly == 1:
+                metrics[cls_name]["tp"] += 1
+            elif is_anomaly == 0 and gt_anomaly == 0:
+                metrics[cls_name]["tn"] += 1
+            elif is_anomaly == 1 and gt_anomaly == 0:
+                metrics[cls_name]["fp"] += 1
+            elif is_anomaly == 0 and gt_anomaly == 1:
+                metrics[cls_name]["fn"] += 1
+
+    # 写入 meta.json（保持原结构）
     meta_out_file = os.path.join(results_root, 'meta.json')
-    # 如果你想按 class 分组写入，可以改变结构。这里写成示例中那种一维数组（多条字典）
     with open(meta_out_file, 'w', encoding='utf-8') as f:
-        json.dump(meta_out_list, f, ensure_ascii=False, indent=2)
+        json.dump(meta_out, f, ensure_ascii=False, indent=2)
+
+    # 计算并写出各类别召回率与准确率
+    metrics_out = {}
+    total_tp = total_tn = total_fp = total_fn = 0
+    for cls, v in metrics.items():
+        tp, tn, fp, fn = v["tp"], v["tn"], v["fp"], v["fn"]
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        acc = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
+        metrics_out[cls] = {"recall": recall, "accuracy": acc, "tp": tp, "tn": tn, "fp": fp, "fn": fn}
+        total_tp += tp; total_tn += tn; total_fp += fp; total_fn += fn
+    overall_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    overall_acc = (total_tp + total_tn) / (total_tp + total_tn + total_fp + total_fn) if (total_tp + total_tn + total_fp + total_fn) > 0 else 0.0
+    metrics_out["_overall"] = {"recall": overall_recall, "accuracy": overall_acc,
+                               "tp": total_tp, "tn": total_tn, "fp": total_fp, "fn": total_fn}
+
+    metrics_file = os.path.join(results_root, 'metrics.json')
+    with open(metrics_file, 'w', encoding='utf-8') as f:
+        json.dump(metrics_out, f, ensure_ascii=False, indent=2)
 
     print(f"Done. Meta written to: {meta_out_file}")
-    print(f"Anomaly masks (if any) and heatmaps saved under: {results_root}")
+    print(f"Anomaly maps and masks saved under: {results_root}")
+    print(f"Metrics written to: {metrics_file}")
 
 
 if __name__ == '__main__':
