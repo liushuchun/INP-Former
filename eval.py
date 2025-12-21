@@ -177,13 +177,20 @@ def main(args):
             anomaly_map = (anomaly_map * 255).astype(np.uint8)
             anomaly_map = cv2.resize(anomaly_map, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
 
-            # binary mask via threshold > 90
-            bin_mask = (anomaly_map > 90).astype(np.uint8) * 255
+            # binary mask via relative threshold: mean + k*std with floor
+            mean_val = float(anomaly_map.mean())
+            std_val = float(anomaly_map.std())
+            adaptive_thresh = mean_val + args.rel_thresh_k * std_val
+            adaptive_thresh = max(args.thresh_floor, adaptive_thresh)
+            adaptive_thresh = min(255.0, adaptive_thresh)
+            bin_mask = (anomaly_map > adaptive_thresh).astype(np.uint8) * 255
             if bin_mask.shape[0] != orig_h or bin_mask.shape[1] != orig_w:
                 bin_mask = cv2.resize(bin_mask, (orig_w, orig_h), interpolation=cv2.INTER_NEAREST)
 
-            # 判断是否为异常：二值掩码上有非零像素 -> anomaly=1
-            is_anomaly = 1 if np.any(bin_mask > 0) else 0
+            # 判断是否为异常：结合面积比例和峰值抑制噪声
+            mask_area_ratio = float((bin_mask > 0).sum()) / float(bin_mask.shape[0] * bin_mask.shape[1] + 1e-8)
+            peak_score = float(anomaly_map.max()) / 255.0
+            is_anomaly = 1 if (mask_area_ratio >= args.min_area_ratio and peak_score >= args.min_peak_score) else 0
 
             # 获取 specie_name
             matched_meta = None
@@ -204,12 +211,10 @@ def main(args):
             anomaly_map_path = os.path.join(cls_dir, anomaly_map_name)
             cv2.imwrite(anomaly_map_path, anomaly_map)
 
-            rel_mask_path = None
-            if not (specie_name == "OK" and is_anomaly == 1):
-                mask_name = f"{base_name}_mask.png"
-                mask_path_abs = os.path.join(cls_dir, mask_name)
-                cv2.imwrite(mask_path_abs, bin_mask)
-                rel_mask_path = os.path.relpath(mask_path_abs, results_root).replace('\\','/')
+            mask_name = f"{base_name}_mask.png"
+            mask_path_abs = os.path.join(cls_dir, mask_name)
+            cv2.imwrite(mask_path_abs, bin_mask)
+            rel_mask_path = os.path.relpath(mask_path_abs, results_root).replace('\\','/')
 
             # 全局 img score（用 anomaly map 的均值）
             img_score = float(anomaly_map.mean())
@@ -279,6 +284,10 @@ if __name__ == '__main__':
     parser.add_argument('--crop_size', type=int, default=392)
     parser.add_argument('--INP_num', type=int, default=6)
     parser.add_argument('--phase', type=str, default='test')
+    parser.add_argument('--rel_thresh_k', type=float, default=1.0, help='Relative threshold multiplier on std (mean + k*std)')
+    parser.add_argument('--thresh_floor', type=float, default=90.0, help='Minimum threshold value (0-255)')
+    parser.add_argument('--min_area_ratio', type=float, default=5e-4, help='Minimum mask area ratio to flag anomaly')
+    parser.add_argument('--min_peak_score', type=float, default=0.2, help='Minimum normalized peak score (0-1) to flag anomaly')
     args = parser.parse_args()
 
     args.save_name = args.save_name + f'_dataset={args.dataset}_Encoder={args.encoder}_Resize={args.input_size}_Crop={args.crop_size}_INP_num={args.INP_num}'
