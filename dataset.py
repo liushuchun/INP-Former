@@ -35,29 +35,35 @@ def get_data_transforms(size, isize, mean_train=None, std_train=None):
 
 class RealIADDataset(torch.utils.data.Dataset):
     def __init__(self, root, category, transform, gt_transform, phase):
-        self.img_path = os.path.join(root,category)
         self.transform = transform
         self.gt_transform = gt_transform
-        self.phase = "test"
+        self.phase = phase
 
-        json_path = os.path.join(root,'meta.json')
-        with open(json_path) as file:
-            class_json = file.read()
-        class_json = json.loads(class_json)
+        json_path = os.path.join(root, 'meta.json')
+        with open(json_path, encoding='utf-8') as file:
+            meta = json.load(file)
+
+        meta_section = meta.get(phase, meta.get("test", {}))
+        samples = meta_section.get(category, [])
 
         self.img_paths, self.gt_paths, self.labels, self.types = [], [], [], []
 
-        data_set = class_json["test"]
-        for sample in data_set:
-            print(root,category,sample)
-            self.img_paths.append(os.path.join(root,   category, sample['image_path']))
-            label = sample['anomaly_class'] != 'OK'
-            if label:
-                self.gt_paths.append(os.path.join(root, category, sample['mask_path']))
-            else:
-                self.gt_paths.append(None)
+        for sample in samples:
+            img_rel = sample.get('img_path', '')
+            mask_rel = sample.get('mask_path', None)
+            specie_name = sample.get('specie_name', '')
+            anomaly_flag = sample.get('anomaly')
+            if anomaly_flag is None:
+                anomaly_flag = 0 if specie_name == 'OK' else 1
+            label = bool(anomaly_flag)
+
+            img_abs = os.path.join(root, img_rel)
+            mask_abs = os.path.join(root, mask_rel) if (mask_rel not in [None, ""] and label) else None
+
+            self.img_paths.append(img_abs)
+            self.gt_paths.append(mask_abs)
             self.labels.append(label)
-            self.types.append(sample['anomaly_class'])
+            self.types.append(specie_name if specie_name != '' else ('OK' if not label else 'NG'))
 
         self.img_paths = np.array(self.img_paths)
         self.gt_paths = np.array(self.gt_paths)
@@ -79,8 +85,11 @@ class RealIADDataset(torch.utils.data.Dataset):
         if label == 0:
             gt = torch.zeros([1, img.size()[-2], img.size()[-2]])
         else:
-            gt = Image.open(gt)
-            gt = self.gt_transform(gt)
+            if gt is None or not os.path.exists(gt):
+                gt = torch.zeros([1, img.size()[-2], img.size()[-2]])
+            else:
+                gt = Image.open(gt).convert('L')
+                gt = self.gt_transform(gt)
 
         assert img.size()[1:] == gt.size()[1:], "image.size != gt.size !!!"
 
@@ -149,5 +158,3 @@ class MVTecDataset(torch.utils.data.Dataset):
         assert img.size()[1:] == gt.size()[1:], "image.size != gt.size !!!"
 
         return img, gt, label, img_path
-
-
