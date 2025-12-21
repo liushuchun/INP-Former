@@ -241,9 +241,7 @@ if __name__ == '__main__':
                  'pcb1', 'pcb2', 'pcb3', 'pcb4', 'pipe_fryum']
     elif args.dataset == 'Real-IAD':
         # args.data_path = 'E:\IMSN-LW\dataset\Real-IAD'  # '/path/to/dataset/Real-IAD/'
-        args.item_list = ['audiojack', 'bottle_cap', 'button_battery', 'end_cap', 'eraser', 'fire_hood',
-                 'mint', 'mounts', 'pcb', 'phone_battery', 'plastic_nut', 'plastic_plug',
-                 'porcelain_doll', 'regulator', 'rolled_strip_base', 'sim_card_set', 'switch', 'tape',
-                 'terminalblock', 'toothbrush', 'toy', 'toy_brick', 'transistor1', 'usb',
-                 'usb_adaptor', 'u_block', 'vcpill', 'wooden_beads', 'woodstick', 'zipper']
+        args.item_list = ['audio_jack_socket', 'chip-inductor', 'gear', 'thyristor', 'battery', 'connector',
+                 'hex_plug', 'mouse_socket', 'button_battery_holder', 'flower_copper_shape', 'lock',
+                 'pencil_sharpener']
     main(args)
